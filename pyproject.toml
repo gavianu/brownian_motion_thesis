@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simcore"
+version = "0.2.0"
+description = "3D Brownian/Langevin many-particle simulator with SOLID design and optional VPython viz"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.22", "pandas>=2.0"]
+authors = [{name="Octavian Stirbei"}]
+
+[tool.setuptools.packages.find]
+where = ["src"]
