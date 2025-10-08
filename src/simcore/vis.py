@@ -150,3 +150,62 @@ def animate_vpython(
         for i in range(M):
             x, y, z = (r_series[i, k] * viz_scale).tolist()
             balls[i].pos = vector(x, y, z)
+# --------------------------- 2D plotting ---------------------------
+
+def plot_timeseries_vpython(
+    t: np.ndarray,
+    series: dict,
+    title: str = "Analiză MSD / sum(coord)^2 vs timp",
+    xlabel: str = "t [s]",
+    ylabel: str = "sum coord^2 (unități SI^2)",
+    legend: bool = True
+):
+    """
+    Plotează serii temporale 2D în VPython (graph + gcurve).
+
+    Parametri
+    ---------
+    t : np.ndarray, shape (T+1,)
+        Timpul (secunde).
+    series : dict[str, np.ndarray]
+        Dicționar {nume_curba -> valori_y}; toate y au shape (T+1,).
+        Ex.: {"sum_x2": yx, "sum_y2": yy, "sum_tot2": ytot}
+    title, xlabel, ylabel : str
+        Titlu și etichete axe.
+    legend : bool
+        Desenează legendă simplă (text static) în titlu.
+
+    Observații:
+    -----------
+    - VPython 2D (graph, gcurve) e potrivit pentru inspectare rapidă.
+    - Dacă vrei PNG-uri, folosește matplotlib în afara proiectului;
+      aici rămânem pe VPython ca să nu adăugăm dependențe.
+    """
+    try:
+        from vpython import graph, gcurve, color
+    except Exception as e:
+        raise RuntimeError('VPython is not installed. Run `pip install vpython`.') from e
+
+    # Paletă simplă, stabilă
+    palette = [color.red, color.green, color.blue, color.cyan, color.magenta, color.yellow, color.white, color.orange]
+    names = list(series.keys())
+
+    # Titlu cu legendă textuală minimală
+    if legend:
+        legend_txt = " | ".join(names)
+        full_title = f"{title}  —  {legend_txt}"
+    else:
+        full_title = title
+
+    g = graph(title=full_title, xtitle=xlabel, ytitle=ylabel, width=900, height=600, fast=False)
+
+    curves = []
+    for i, name in enumerate(names):
+        curves.append(gcurve(graph=g, color=palette[i % len(palette)], label=name))
+
+    # Adăugăm punctele (downsample dacă T e uriaș, pentru performanță)
+    T = len(t)
+    step = max(1, T // 5000)  # la nevoie, redu punctele la ~5000
+    for k in range(0, T, step):
+        for c, name in zip(curves, names):
+            c.plot(t[k], float(series[name][k]))
