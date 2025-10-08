@@ -15,8 +15,7 @@ from .simulator import Simulator
 def parse_args():
     """
     Parsează argumentele din linia de comandă.
-    Folosim argparse ca să expunem, într-un mod standard, toți parametrii
-    (numerici + fizici) ai simulării, plus opțiunile de vizualizare.
+    Expunem parametri numerici/fizici ai simulării + opțiuni de inițializare și pereți.
     """
     p = argparse.ArgumentParser(description='3D Brownian/Langevin simulator')
 
@@ -30,35 +29,49 @@ def parse_args():
     p.add_argument('--dt', type=float, default=1e-3,
                    help="Pasul de timp Δt [s]. În underdamped, alege Δt << m/γ pentru stabilitate.")
     p.add_argument('--dims', type=int, default=3, choices=[1,2,3],
-                   help="Dimensionalitatea spațiului (1/2/3). Afectează doar forma vectorilor și factorul din MSD.")
-    p.add_argument('--scheme', type=str, default='langevin', choices=['langevin','brownian','ballistic'],
-                   help="Alege integratorul: 'langevin' (underdamped, cu viteză) sau 'brownian' (overdamped/random walk).")
+                   help="Dimensionalitatea spațiului (1/2/3). Afectează forma vectorilor și factorul din MSD.")
+    p.add_argument('--scheme', type=str, default='langevin',
+                   choices=['langevin','brownian','ballistic'],
+                   help="Integrator: 'langevin' (underdamped), 'brownian' (overdamped) sau 'ballistic' (drept).")
 
-    # wall single (pentru test simplu)
-    p.add_argument('--enable-walls', action='store_true')
-    p.add_argument('--wall-normal', type=float, nargs='+', default=None, help='Normal perete (1,2 sau 3 valori)')
-    p.add_argument('--wall-c', type=float, default=0.0, help='Offset c în ecuația n·r=c')
-
-    # preset de test 30°
+    # --- PEREȚI (plan n·r=c) / CUTIE ---
+    p.add_argument('--enable-walls', action='store_true',
+                   help="Activează coliziunile cu pereții definiți (planuri sau cutie).")
+    p.add_argument('--wall-normal', type=float, nargs='+', default=None,
+                   help='Vector normal al unui perete (1,2 sau 3 componente).')
+    p.add_argument('--wall-c', type=float, default=0.0,
+                   help='Offset c în ecuația planului n·r=c [m].')
+    p.add_argument('--box', type=float, nargs='+', default=None,
+                   help='Cutie axis-aligned: 3D: xmin xmax ymin ymax zmin zmax ; 2D: xmin xmax ymin ymax.')
+    p.add_argument('--box-csv', type=str, default=None,
+               help='Alternativă robustă: "xmin,xmax,ymin,ymax[,zmin,zmax]" (valorile despărțite prin virgulă).')
+ 
+    # --- PRESET DE TEST SPECULAR (fără zgomot) ---
     p.add_argument('--test-specular', action='store_true',
-                help='Preset: câteva particule, viteză la 30° spre perete, fără zgomot.')
-    
+                   help='Preset: particule la 30° spre un perete plan; pornesc pe rând (stagger), fără zgomot.')
+
     # --- PARAMETRI FIZICI (SI) ---
-    # Notă: m (kg), gamma (kg/s), T (K), kB (J/K)
     p.add_argument('--m', type=float, default=4.19e-15,
-                   help="Masa particulei [kg] (utilă DOAR în schema 'langevin'). Presetat pentru o particulă de 1 μm rază (a = 1e-6 m)")
+                   help="Masa [kg] (folosită în 'langevin').")
     p.add_argument('--gamma', type=float, default=1.88e-8,
-                   help="Coeficient de frecare γ [kg/s]. Intră în -(γ/m)v (Langevin) și D=kB*T/γ (Brownian).")
+                   help="Frecare γ [kg/s]. Intră în -(γ/m)v (Langevin) și D=kB*T/γ (Brownian).")
     p.add_argument('--T', type=float, default=300.0,
                    help="Temperatura [K]. Zgomotul termic crește cu T.")
     p.add_argument('--kB', type=float, default=1.380649e-23,
-                   help="Constanta lui Boltzmann [J/K] (valoare standard SI).")
+                   help="Constanta lui Boltzmann [J/K].")
 
-    # --- CONDIȚII INIȚIALE ---
-    # Pentru cerința “a)”: toate particulele pornesc din același punct cu viteză 0.
-    # Acceptăm totuși valori custom (liste de lungime = dims).
+    # --- CONDIȚII INIȚIALE (mod + parametri) ---
+    p.add_argument('--init-dist', type=str, default='point',
+                   choices=['point', 'jitter', 'uniform'],
+                   help="Mod inițializare poziții: "
+                        "'point' = toate la --init-pos; "
+                        "'jitter' = gaussian în jurul --init-pos (σ=--init-jitter); "
+                        "'uniform' = uniform în --box (obligatoriu).")
+    p.add_argument('--init-jitter', type=float, default=0.0,
+                   help='Deviație standard [m] pentru jitter gaussian (folosită doar la init-dist=jitter).')
+
     p.add_argument('--init-pos', type=float, nargs='+', default=None,
-                   help="Poziția inițială (len=dims). Implicit: vector nul.")
+                   help="Poziția inițială de referință (len=dims). Implicit: vector nul.")
     p.add_argument('--init-vel', type=float, nargs='+', default=None,
                    help="Viteza inițială (len=dims). Ignorată în 'brownian'. Implicit: vector nul.")
     p.add_argument('--seed', type=int, default=None,
@@ -68,41 +81,117 @@ def parse_args():
     p.add_argument('--enable-vpython', action='store_true',
                    help="Dacă este setat, pornește animația VPython după simulare.")
     p.add_argument('--viz-n', type=int, default=100,
-                   help="Număr maxim de particule afișate în animație (pentru performanță).")
-    p.add_argument('--viz-scale', type=float, default=0.0, help='Factor de scalare pe ecran (0=auto-scale pe RMS).')
-    p.add_argument('--viz-trail', action='store_true', help='Dacă este setat, desenează trasee (trails) pentru particulele vizualizate.')
+                   help="Număr maxim de particule afișate (pentru performanță).")
+    p.add_argument('--viz-scale', type=float, default=0.0,
+                   help='Factor de scalare pe ecran (0=auto-scale pe RMS).')
+    p.add_argument('--viz-trail', action='store_true',
+                   help='Dacă este setat, desenează trasee (trails).')
 
     return p.parse_args()
 
 def main():
     """
-    Punctul de intrare când rulăm modulul ca script:
-      python -m simcore.cli [ARGUMENTE]
-    1) Parsează argumentele.
-    2) Construiește obiectul de configurare (SimConfig).
-    3) Rulează simularea cu Simulator(cfg).
-    4) Afișează căile fișierelor scrise.
+    Flux:
+      1) Parsează argumentele.
+      2) Validează/compune pereții (planuri + cutie).
+      3) Construiește SimConfig (centralizează setările).
+      4) Rulează simularea (scrie .dat și, opțional, animă).
     """
     a = parse_args()
 
-    # Validare și pregătire condiții inițiale (shape = (dims,))
+    # Dimensiune spațiu
     dims = a.dims
+
+    # Condiții inițiale (shape = (dims,))
     init_pos = np.zeros(dims) if a.init_pos is None else np.asarray(a.init_pos, float)
     init_vel = np.zeros(dims) if a.init_vel is None else np.asarray(a.init_vel, float)
 
-    # walls din args (opțional)
+    # ------------------------
+    # PEREȚI DIN ARGUMENTE
+    # ------------------------
     walls = tuple()
+
+    # Perete singular n·r=c (opțional)
     if a.enable_walls and a.wall_normal is not None:
         n = np.asarray(a.wall_normal, float)
-        if n.size not in (1,2,3):
+        if n.size not in (1, 2, 3):
             raise ValueError('--wall-normal trebuie să aibă 1, 2 sau 3 componente.')
         if n.size != dims:
+            # Adaptăm normalul la numărul de dimensiuni cerut
             n2 = np.zeros(dims, float); n2[:n.size] = n; n = n2
-        # (nx, ny, nz, c)
-        nx = float(n[0]); ny = float(n[1] if dims>1 else 0.0); nz = float(n[2] if dims>2 else 0.0)
-        walls = ((nx, ny, nz, float(a.wall_c)),)
+        nx = float(n[0])
+        ny = float(n[1] if dims > 1 else 0.0)
+        nz = float(n[2] if dims > 2 else 0.0)
+        walls = walls + ((nx, ny, nz, float(a.wall_c)),)
 
-    # preset test specular 30° (fără zgomot)
+    # Cutie axis-aligned (opțional) – adaugă 4 (2D) sau 6 (3D) pereți
+    box = None 
+    # 1) Încearcă --box-csv dacă e prezent (robust la copy/paste)
+    if a.box_csv is not None:
+        try:
+            vals = [float(s) for s in a.box_csv.replace(';', ',').split(',')]
+        except ValueError:
+            raise ValueError('--box-csv are valori ne-numerice. Format: xmin,xmax,ymin,ymax[,zmin,zmax]')
+        if dims == 3:
+            if len(vals) != 6:
+                raise ValueError('--box-csv în 3D cere 6 numere: xmin,xmax,ymin,ymax,zmin,zmax')
+            xmin, xmax, ymin, ymax, zmin, zmax = vals
+            walls = walls + (
+                (+1.0, 0.0, 0.0, xmax),
+                (-1.0, 0.0, 0.0, -xmin),
+                (0.0, +1.0, 0.0, ymax),
+                (0.0, -1.0, 0.0, -ymin),
+                (0.0, 0.0, +1.0, zmax),
+                (0.0, 0.0, -1.0, -zmin),
+            )
+            box = (xmin, xmax, ymin, ymax, zmin, zmax)
+        else:
+            if len(vals) != 4:
+                raise ValueError('--box-csv în 2D cere 4 numere: xmin,xmax,ymin,ymax')
+            xmin, xmax, ymin, ymax = vals
+            walls = walls + (
+                (+1.0, 0.0, 0.0, xmax),
+                (-1.0, 0.0, 0.0, -xmin),
+                (0.0, +1.0, 0.0, ymax),
+                (0.0, -1.0, 0.0, -ymin),
+            )
+            box = (xmin, xmax, ymin, ymax)
+
+    # 2) Dacă nu e --box-csv, folosește --box 
+    elif a.box is not None:
+        vals = list(map(float, a.box))
+        if dims == 3:
+            if len(vals) != 6:
+                raise ValueError('--box în 3D cere 6 numere: xmin xmax ymin ymax zmin zmax')
+            xmin, xmax, ymin, ymax, zmin, zmax = vals
+            walls = walls + (
+                (+1.0, 0.0, 0.0, xmax),
+                (-1.0, 0.0, 0.0, -xmin),
+                (0.0, +1.0, 0.0, ymax),
+                (0.0, -1.0, 0.0, -ymin),
+                (0.0, 0.0, +1.0, zmax),
+                (0.0, 0.0, -1.0, -zmin),
+            )
+            box = (xmin, xmax, ymin, ymax, zmin, zmax)
+        else:
+            if len(vals) != 4:
+                raise ValueError('--box în 2D cere 4 numere: xmin xmax ymin ymax')
+            xmin, xmax, ymin, ymax = vals
+            walls = walls + (
+                (+1.0, 0.0, 0.0, xmax),
+                (-1.0, 0.0, 0.0, -xmin),
+                (0.0, +1.0, 0.0, ymax),
+                (0.0, -1.0, 0.0, -ymin),
+            )
+            box = (xmin, xmax, ymin, ymax)
+
+    # Validări pentru modul de inițializare
+    if a.init_dist == 'jitter' and a.init_jitter <= 0.0:
+        raise ValueError("Pentru --init-dist=jitter trebuie --init-jitter > 0.")
+    if a.init_dist == 'uniform' and box is None:
+        raise ValueError("Pentru --init-dist=uniform trebuie definită o cutie cu --box.")
+
+    # PRESET TEST SPECULAR (fără zgomot; lansare pe rând → nu se suprapun vizual)
     test_specular = False
     if a.test_specular:
         test_specular = True
@@ -111,47 +200,53 @@ def main():
         a.N = 3
         a.steps = 300
         a.dt = 1e-3
-        # poziție inițială: în fața peretelui x=0
-        init_pos = np.array([0.1, 0.0] + ([0.0] if dims==3 else []), float)
-        # v la 30° față de plan, spre perete (-x)
-        theta = np.deg2rad(30.0)
-        vmag = 1.0
-        vx = -vmag * np.cos(theta)
-        vy =  vmag * np.sin(theta)
-        init_vel = np.array([vx, vy] + ([0.0] if dims==3 else []), float)
-        # perete x=0, normal (1,0[,0])
-        walls = ((1.0, 0.0, 0.0, 0.0),)    
 
-    # Verificăm că utilizatorul a dat exact dims valori pentru poziție/viteză
+        # Poziție inițială comună (păstrăm cerința)
+        init_pos = np.array([0.1, 0.0] + ([0.0] if dims == 3 else []), float)
+
+        # Viteză la 30° față de plan, spre perete (-x)
+        theta = np.deg2rad(30.0); vmag = 1.0
+        vx = -vmag * np.cos(theta); vy = vmag * np.sin(theta)
+        init_vel = np.array([vx, vy] + ([0.0] if dims == 3 else []), float)
+
+        # Perete x=0
+        walls = walls + ((1.0, 0.0, 0.0, 0.0),)
+
+    # Validări forme pentru init_pos/init_vel
     if init_pos.shape != (dims,):
         raise ValueError(f'--init-pos must have length {dims}')
     if init_vel.shape != (dims,):
         raise ValueError(f'--init-vel must have length {dims}')
 
-    # Construim obiectul de configurare. Toată logica din cod citește din SimConfig,
-    # ceea ce face ușoară reproducerea experimentelor și extinderea ulterioară.
+    # ------------------------
+    # CONSTRUIRE CONFIGURAȚIE
+    # ------------------------
     cfg = SimConfig(
+        # nucleu
         N=a.N, steps=a.steps, dt=a.dt, dims=dims,
+        # fizică
         m=a.m, gamma=a.gamma, T=a.T, kB=a.kB,
+        # ICs
         init_pos=init_pos, init_vel=init_vel,
-        scheme=a.scheme, 
-        enable_walls=(a.enable_walls or test_specular),
+        init_dist=a.init_dist, init_jitter=a.init_jitter, box=box,
+        # integrator
+        scheme=a.scheme,
+        # pereți
+        enable_walls=(a.enable_walls or test_specular or (box is not None)),
         walls=walls, test_specular=test_specular,
-        seed=a.seed,
-        output_dir=a.output,
+        # RNG / output
+        seed=a.seed, output_dir=a.output,
+        # viz
         enable_vpython=a.enable_vpython, viz_n=a.viz_n,
-        viz_scale=a.viz_scale, viz_trail=a.viz_trail
+        viz_scale=a.viz_scale, viz_trail=a.viz_trail,
     )
 
-    # Rulăm simularea: orchestratorul (Simulator) apelează integratorul ales (Strategy)
-    # și scrie fișierele .dat (mean_position.dat & mean_dispersion.dat).
+    # ------------------------
+    # RULARE + FEEDBACK
+    # ------------------------
     mp, md = Simulator(cfg).run()
-
-    # Feedback minimal în consolă (utile pentru notebook/loguri CI)
     print('Wrote:', mp)
     print('Wrote:', md)
 
 if __name__ == '__main__':
-    # Permite rularea modulului direct:
-    #   python -m simcore.cli --scheme brownian --N 5000 --steps 2000 --dt 1e-3 --dims 3 ...
     main()

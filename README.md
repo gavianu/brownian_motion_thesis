@@ -254,3 +254,201 @@ MIT License
 ---
 
 **Design**: Interfețele (`.step`, `.positions`, `.velocities`, `.set_state`) și formele `(N, dims)` rămân constante → poți adăuga ușor PBC, coliziuni, forțe externe etc., respectând substituibilitatea (LSP).
+
+## 11) Dicționar de comenzi (simulare & analiză)
+
+### 0) Setup rapid (o singură dată)
+
+```bash
+python -m venv .venv
+```
+
+#### macOS/Linux:
+
+```bash
+source .venv/bin/activate
+```
+
+#### Windows:
+
+```bash
+ .venv\Scripts\activate
+```
+
+```bash
+pip install -e .
+```
+
+#### opțional pentru animații 3D/2D:
+
+```bash
+pip install vpython
+```
+
+### 1) Cerința „a)” (simplu, fără pereți)
+
+Toate particulele pornesc din același punct, viteză 0, fără ciocniri; salvăm media poziției și împrăștierea.
+
+#### Langevin (underdamped):
+
+```bash
+python -m simcore.cli --scheme langevin --dims 3 \
+  --N 10000 --steps 2000 --dt 1e-9 \
+  --m 4.19e-15 --gamma 1.88e-8 --T 300 --kB 1.380649e-23 \
+  --init-pos 0 0 0 --init-vel 0 0 0 \
+  --output ./outputLangevin
+```
+
+#### Brownian (overdamped):
+
+```bash
+python -m simcore.cli --scheme brownian --dims 3 \
+  --N 10000 --steps 2000 --dt 1e-3 \
+  --gamma 1.88e-8 --T 300 --kB 1.380649e-23 \
+  --init-pos 0 0 0 \
+  --output ./outputBrownian
+```
+
+Fișiere: mean_position.dat, mean_dispersion.dat (TSV tab-delimited).
+
+### 2) Vizualizare 3D (VPython) – opțional
+
+Afișează un subset (viz_n) din particule; nu afectează datele .dat.
+
+```bash
+python -m simcore.cli --scheme brownian --dims 3 \
+  --N 10000 --steps 2000 --dt 1e-3 \
+  --gamma 1.88e-8 --T 300 --kB 1.380649e-23 \
+  --init-pos 0 0 0 \
+  --enable-vpython --viz-n 200 --viz-trail \
+  --output ./outputBrownian_viz
+```
+
+### 3) Analiză MSD (suma coord², pante → coeficient difuzie)
+
+Construiește sum_x2.dat, … și (opțional) estimează pantele pe fereastra selectată.
+
+Detectează axele automat & plotează (2D VPython):
+
+```bash
+python -m simcore.analyze --input ./outputBrownian --N 10000 \
+  --axes auto --plot --plot-total
+```
+
+Fit pe ultima jumătate din puncte + salvează raportul pantei:
+
+```bash
+python -m simcore.analyze --input ./outputBrownian --N 10000 \
+  --axes x y z --fit-last-frac 0.5 \
+  --plot --plot-total \
+  --fit-out ./outputBrownian/fit_report.dat
+```
+
+Fără timp (pe index 0..T) + conversie în s cu Δt (dacă vrei):
+
+```bash
+python -m simcore.analyze --input ./outputBrownian --N 10000 \
+  --axes all --use-index --dt 1e-3 \
+  --plot --plot-total
+```
+
+Agregat într-un singur fișier (toate seriile + total):
+
+```bash
+python -m simcore.analyze --input ./outputBrownian --N 10000 \
+  --axes all --aggregate-out ./outputBrownian/sum_all.dat
+```
+
+Teorie: în regim difuziv (t mare) panta
+
+pe axă: m ≈ 2 N D → D_hat(1D) = m/(2N)
+
+total (d axe): m_tot ≈ 2 N d D → D_hat_tot = m_tot/(2Nd)
+
+### 4) Test de reflexie speculară (fără zgomot) – unghi 30°
+
+Validare coliziune elastică: unghiul de reflexie = unghiul de incidență.
+
+```bash
+python -m simcore.cli --test-specular --enable-vpython --viz-trail \
+  --output ./out_specular
+```
+
+Pre-set: 3 particule, scheme=ballistic, perete x=0, viteză la 30°, lansate pe rând (stagger).
+
+### 5) Cutie 3D (± valori) – pereți + distribuții inițiale
+
+Uniform în cub (Brownian):
+(folosește `--box-csv` dacă shell-ul îți strică minusurile)
+
+```bash
+python -m simcore.cli --scheme brownian --dims 3 \
+ --N 10000 --steps 5000 --dt 1e-3 \
+ --gamma 1.88e-8 --T 300 --kB 1.380649e-23 \
+ --init-dist uniform --box-csv="-5e-6,5e-6,-5e-6,5e-6,-5e-6,5e-6" \
+ --enable-walls \
+ --enable-vpython --viz-n 400 --viz-trail \
+ --output ./out_box_uniform_brownian
+```
+
+Jitter în jurul originii (Langevin, stabil numeric):
+
+```bash
+python -m simcore.cli --scheme langevin --dims 3 \
+ --N 2000 --steps 2000000 --dt 2e-9 \
+ --m 4.19e-15 --gamma 1.88e-8 --T 300 --kB 1.380649e-23 \
+ --init-dist jitter --init-jitter 3e-7 --init-pos 0 0 0 --init-vel 0 0 0 \
+ --box-csv="-5e-6,5e-6,-5e-6,5e-6,-5e-6,5e-6" \
+ --enable-walls \
+ --enable-vpython --viz-n 200 \
+ --output ./out_box_jitter_langevin
+```
+
+Stabilitate Langevin: alege Δt ≪ τ_v = m/γ; ca regulă: Δt ≤ τ_v/50.
+Cu valorile date: τ_v ~ 2.23e-7 s ⇒ Δt în jur de 1e-9…4e-9 s.
+
+#### 6) “Langevin de jucărie” (unități scalate, vizibil rapid)
+
+Vrei să se vadă clar mișcarea, fără să crești T: poți rula în unități scalate (nu SI), cu
+
+$$ m=1, γ=1, kB​=1, T=1 $$
+Matematic e același model Langevin, doar că lucrezi în „unități 1”.
+
+```bash
+python -m simcore.cli --scheme langevin --dims 3 \
+ --N 1000 --steps 10000 --dt 1e-2 \
+ --m 1 --gamma 1 --kB 1 --T 1 \
+ --init-dist jitter --init-jitter 0.1 --init-pos 0 0 0 --init-vel 0 0 0 \
+ --box-csv="-5,5,-5,5,-5,5" \
+ --enable-walls --enable-vpython --viz-n 300 --viz-trail \
+ --output ./out_unitbox_langevin
+```
+
+Asta e pentru demo vizual/intuire (nu compara numeric cu SI).
+Dacă vrei să rămâi în SI dar „să se vadă”, crește timpul total simulat (mai multe steps) sau micșorează γ.
+
+#### 7) Balistic în cub (fără zgomot), uniform inițial
+
+```bash
+python -m simcore.cli --scheme ballistic --dims 3 \
+ --N 2000 --steps 4000 --dt 5e-4 \
+ --init-dist uniform --box-csv="-1,1,-1,1,-1,1" \
+ --init-vel 0.2 0.1 0.0 \
+ --enable-walls --enable-vpython --viz-n 200 --viz-trail \
+ --output ./out_cube_uniform_ballistic
+```
+
+#### 8) Tips utile
+
+- `--box` vs `--box-csv`: \
+   `--box xmin xmax ymin ymax [zmin zmax]` merge, dar unele shell-uri strică minusurile; \
+   `--box-csv="xmin,xmax,ymin,ymax[,zmin,zmax]"` e robust la copy/paste.
+
+- VPython & memorie: animația reține r_series (N×(steps+1)×dims). Pentru timp total foarte mare, fie:
+
+  - redu N/steps când folosești --enable-vpython,
+
+  - sau rulează fără `--enable-vpython` (doar salvezi .dat) și vizualizezi separat.
+
+- Stabilitate Langevin: dacă vezi overflow/NaN, ai dt prea mare față de m/γ.
+  Calculează τv​=m/γ și alege dt ≲ τ_v/50.
