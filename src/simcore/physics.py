@@ -123,7 +123,11 @@ class BrownianOverdamped:
         v_next = np.zeros_like(v)
 
         return r_next, v_next
-
+    
+class Ballistic:
+    """Mișcare rectilinie uniformă: r_{n+1} = r_n + v_n dt ; v_{n+1} = v_n (constant)"""
+    def step(self, r: np.ndarray, v: np.ndarray, dt: float):
+        return r + v*dt, v
 
 # =============================================================================
 # VERIFICĂRI TEORETICE (ghid numeric – NU schimbă codul)

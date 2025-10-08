@@ -9,7 +9,7 @@
 #    păstrează aceste unități implicit prin valori; comentariile indică unitățile.
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Tuple
 import numpy as np
 
 @dataclass(frozen=True)
@@ -153,7 +153,17 @@ class SimConfig:
     # Alege modelul numeric:
     #   "langevin"  → underdamped (folosește m, v; are inerție explicita)
     #   "brownian"  → overdamped (random walk; v nu se folosește)
+    #   "ballistic" → mișcare rectilinie uniformă (fără zgomot/frânare; test)
 
+    # Boundaries
+    enable_walls: bool = False
+
+    # listă de pereți (normal, c) cu normalul unit și c în [m]; plan: n·r = c
+    walls: Tuple[Tuple[float, float, float, float], ...] = tuple()
+
+    # --- nou: mod de test specular ---
+    test_specular: bool = False
+    
     seed: Optional[int] = None
     # Sămânța RNG (reproductibilitate). Afectează șirul de zgomote η.
 

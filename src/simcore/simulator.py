@@ -13,8 +13,9 @@ from .config import SimConfig
 from .models import Ensemble
 from .metrics import mean_position, dispersion
 from .io import DataWriter
-from .physics import LangevinEM, BrownianOverdamped
+from .physics import LangevinEM, BrownianOverdamped, Ballistic
 from .vis import animate_vpython
+from .boundaries import WallPlane
 
 class Simulator:
     """
@@ -50,14 +51,31 @@ class Simulator:
         # Alegem integratorul în funcție de schemă (Strategy).
         #  - LangevinEM: underdamped (are viteză explicită, inerție)
         #  - BrownianOverdamped: overdamped (random walk gaussian)
-        self.integrator = (
-            LangevinEM(cfg.m, cfg.gamma, cfg.kB, cfg.T)
-            if cfg.scheme == 'langevin'
-            else BrownianOverdamped(cfg.gamma, cfg.kB, cfg.T)
-        )
+        if cfg.scheme == 'langevin':
+            self.integrator = LangevinEM(cfg.m, cfg.gamma, cfg.kB, cfg.T)
+        elif cfg.scheme == 'brownian':
+            self.integrator = BrownianOverdamped(cfg.gamma, cfg.kB, cfg.T)
+        elif cfg.scheme == 'ballistic':
+            self.integrator = Ballistic()
+        else:
+            raise ValueError("Unknown scheme.")
+
+        # boundaries
+        self.walls = []
+        if cfg.enable_walls and cfg.walls:
+            for (nx, ny, nz, c) in cfg.walls:
+                n = np.array([nx, ny, nz][:cfg.dims], float)
+                self.walls.append(WallPlane(n, c))
+        self.writer = DataWriter(cfg.output_dir)
 
         # I/O: scriere fișiere .dat (TSV)
         self.writer = DataWriter(cfg.output_dir)
+
+    def _apply_boundaries(self, r, v, dt):
+        # aplicăm pe rând fiecare perete, cu CCD 0..1 impact/pas/perete
+        for wall in self.walls:
+            r, v = wall.collide_step(r, v, dt)
+        return r, v
 
     def run(self):
         """
@@ -122,8 +140,36 @@ class Simulator:
         #   1) integrator.step(...) -> (r_next, v_next)
         #   2) actualizăm Ensemble
         #   3) calculăm statisticile și (opțional) salvăm pentru vizualizare
+
+        printed = np.zeros(self.cfg.N, dtype=bool)
+
         for k in range(1, T + 1):
-            r, v = self.integrator.step(r, v, dt)
+            v_before = v.copy()
+            r_new, v_new = self.integrator.step(r, v, dt)
+            if self.walls:
+                r_new, v_new = self._apply_boundaries(r_new, v_new, dt)
+
+            # --- DEBUG TEST: unghi incidență/reflexie (doar dacă test_specular) ---
+            if self.cfg.test_specular and self.walls:
+                n = self.walls[0].n  # un singur perete în test
+                nv_before = np.einsum('nd,d->n', v_before, n)  # v·n
+                nv_after  = np.einsum('nd,d->n', v_new,    n)
+                # detecție reflexie: schimbare de semn a componentei normale
+                collided = (nv_before < 0) & (nv_after > 0) & (~printed)
+                idx = np.where(collided)[0]
+                for i in idx[:10]:  # nu umple consola
+                    v_in = v_before[i]; v_out = v_new[i]
+                    # unghi față de normal (0° = perpendicular pe perete)
+                    def angle_to_normal(u):
+                        un = abs(np.dot(u, n)) / (np.linalg.norm(u) + 1e-30)
+                        un = np.clip(un, 0.0, 1.0)
+                        return np.degrees(np.arccos(un))
+                    th_in  = angle_to_normal(v_in)
+                    th_out = angle_to_normal(v_out)
+                    print(f"[SPECULAR] id={i}  theta_in={th_in:.2f}°,  theta_out={th_out:.2f}°  (≈ egale)")
+                    printed[i] = True
+
+            r, v = r_new, v_new
             self.ensemble.set_state(r, v)
 
             m = mean_position(r)
@@ -141,11 +187,9 @@ class Simulator:
 
         # Vizualizare (opțională): NU afectează datele scrise; doar scalează pe ecran.
         if r_series is not None:
-            animate_vpython(
-                r_series, dt,
-                viz_n=self.cfg.viz_n,
-                viz_scale=self.cfg.viz_scale,
-                viz_trail=self.cfg.viz_trail
-            )
+            walls = [(w.n, w.c) for w in self.walls]
+            animate_vpython(r_series, dt, viz_n=self.cfg.viz_n,
+                                viz_scale=self.cfg.viz_scale, viz_trail=self.cfg.viz_trail,
+                                walls=walls)
 
         return mp, md

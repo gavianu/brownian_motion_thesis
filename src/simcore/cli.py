@@ -31,9 +31,18 @@ def parse_args():
                    help="Pasul de timp Δt [s]. În underdamped, alege Δt << m/γ pentru stabilitate.")
     p.add_argument('--dims', type=int, default=3, choices=[1,2,3],
                    help="Dimensionalitatea spațiului (1/2/3). Afectează doar forma vectorilor și factorul din MSD.")
-    p.add_argument('--scheme', type=str, default='langevin', choices=['langevin','brownian'],
+    p.add_argument('--scheme', type=str, default='langevin', choices=['langevin','brownian','ballistic'],
                    help="Alege integratorul: 'langevin' (underdamped, cu viteză) sau 'brownian' (overdamped/random walk).")
 
+    # wall single (pentru test simplu)
+    p.add_argument('--enable-walls', action='store_true')
+    p.add_argument('--wall-normal', type=float, nargs='+', default=None, help='Normal perete (1,2 sau 3 valori)')
+    p.add_argument('--wall-c', type=float, default=0.0, help='Offset c în ecuația n·r=c')
+
+    # preset de test 30°
+    p.add_argument('--test-specular', action='store_true',
+                help='Preset: câteva particule, viteză la 30° spre perete, fără zgomot.')
+    
     # --- PARAMETRI FIZICI (SI) ---
     # Notă: m (kg), gamma (kg/s), T (K), kB (J/K)
     p.add_argument('--m', type=float, default=4.19e-15,
@@ -81,6 +90,38 @@ def main():
     init_pos = np.zeros(dims) if a.init_pos is None else np.asarray(a.init_pos, float)
     init_vel = np.zeros(dims) if a.init_vel is None else np.asarray(a.init_vel, float)
 
+    # walls din args (opțional)
+    walls = tuple()
+    if a.enable_walls and a.wall_normal is not None:
+        n = np.asarray(a.wall_normal, float)
+        if n.size not in (1,2,3):
+            raise ValueError('--wall-normal trebuie să aibă 1, 2 sau 3 componente.')
+        if n.size != dims:
+            n2 = np.zeros(dims, float); n2[:n.size] = n; n = n2
+        # (nx, ny, nz, c)
+        nx = float(n[0]); ny = float(n[1] if dims>1 else 0.0); nz = float(n[2] if dims>2 else 0.0)
+        walls = ((nx, ny, nz, float(a.wall_c)),)
+
+    # preset test specular 30° (fără zgomot)
+    test_specular = False
+    if a.test_specular:
+        test_specular = True
+        dims = max(dims, 2)
+        a.scheme = 'ballistic'
+        a.N = 3
+        a.steps = 300
+        a.dt = 1e-3
+        # poziție inițială: în fața peretelui x=0
+        init_pos = np.array([0.1, 0.0] + ([0.0] if dims==3 else []), float)
+        # v la 30° față de plan, spre perete (-x)
+        theta = np.deg2rad(30.0)
+        vmag = 1.0
+        vx = -vmag * np.cos(theta)
+        vy =  vmag * np.sin(theta)
+        init_vel = np.array([vx, vy] + ([0.0] if dims==3 else []), float)
+        # perete x=0, normal (1,0[,0])
+        walls = ((1.0, 0.0, 0.0, 0.0),)    
+
     # Verificăm că utilizatorul a dat exact dims valori pentru poziție/viteză
     if init_pos.shape != (dims,):
         raise ValueError(f'--init-pos must have length {dims}')
@@ -93,7 +134,10 @@ def main():
         N=a.N, steps=a.steps, dt=a.dt, dims=dims,
         m=a.m, gamma=a.gamma, T=a.T, kB=a.kB,
         init_pos=init_pos, init_vel=init_vel,
-        scheme=a.scheme, seed=a.seed,
+        scheme=a.scheme, 
+        enable_walls=(a.enable_walls or test_specular),
+        walls=walls, test_specular=test_specular,
+        seed=a.seed,
         output_dir=a.output,
         enable_vpython=a.enable_vpython, viz_n=a.viz_n,
         viz_scale=a.viz_scale, viz_trail=a.viz_trail

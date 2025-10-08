@@ -38,7 +38,8 @@ def animate_vpython(
     step_dt,
     viz_n: int = 100,
     viz_scale: float = 0.0,
-    viz_trail: bool = False
+    viz_trail: bool = False,
+    walls=None
 ):
     """
     Animează traiectoriile particulelor folosind VPython.
@@ -71,7 +72,7 @@ def animate_vpython(
       RNG-ul simulării, care a fost setat în Simulator).
     """
     try:
-        from vpython import canvas, vector, sphere, color, rate
+        from vpython import canvas, vector, sphere, color, rate, box
     except Exception as e:
         # Mesaj prietenos dacă librăria nu e instalată.
         raise RuntimeError('VPython is not installed. Run `pip install vpython`.') from e
@@ -96,10 +97,33 @@ def animate_vpython(
 
     # Scena VPython (fundal negru pentru contrast, fereastră 900x600)
     scene = canvas(
-        title='Brownian/Langevin 3D',
+        title='Specular / Brownian / Langevin 3D',
         width=900, height=600,
         background=color.black
     )
+
+    # desenează peretele (dacă e specificat)
+    if walls:
+        for (n, c) in walls:
+            n = np.asarray(n, float)
+            # suport simplu: normal paralelă cu axele
+            # determină axa dominantă
+            axis = int(np.argmax(np.abs(n)))
+            # poziție plan în coordonate scalate: r_plot = r * viz_scale
+            pos = [0.0, 0.0, 0.0]
+            size = [10.0, 10.0, 0.02]  # grosime mică
+            # setăm cutia astfel încât fața să fie în planul dorit
+            # x=const, y=const, sau z=const
+            if axis == 0:  # plan x = c
+                pos[0] = c * viz_scale
+                size = [0.02, 10.0, 10.0]
+            elif axis == 1:  # plan y = c
+                pos[1] = c * viz_scale
+                size = [10.0, 0.02, 10.0]
+            else:  # axis == 2, plan z = c
+                pos[2] = c * viz_scale
+                size = [10.0, 10.0, 0.02]
+            box(pos=vector(*pos), size=vector(*size), color=color.white, opacity=0.2)
 
     # Culori pastel random pentru diferențiere vizuală (RNG local: nu afectează simularea)
     rng = np.random.default_rng(42)
